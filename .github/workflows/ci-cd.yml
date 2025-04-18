@@ -1,0 +1,105 @@
+# .github/workflows/ci-cd.yml
+name: CI-CD Pipeline to AWS ECS
+
+on:
+  push:
+    branches: [ main ] # Trigger on push to the main branch
+  workflow_dispatch: # Allow manual trigger
+
+# Environment variables available to all jobs
+env:
+  # === Must Configure These ===
+  AWS_REGION: us-east-1 # Replace with your AWS region (must match Terraform)
+  ECR_REPOSITORY: my-fargate-app-repo # Replace with your ECR repo name (from Terraform output or var.project_name + "-repo")
+  ECS_CLUSTER_NAME: my-fargate-app-cluster # Replace with your ECS cluster name (from Terraform output or var.project_name + "-cluster")
+  ECS_SERVICE_NAME: my-fargate-app-service # Replace with your ECS service name (from Terraform output or var.project_name + "-service")
+  ECS_TASK_DEFINITION_FAMILY: my-fargate-app-task # Replace with your Task Definition family name (from Terraform output or var.project_name + "-task")
+  CONTAINER_NAME: my-fargate-app-container # Replace with the container name defined in Terraform (from Terraform output or var.project_name + "-container")
+  # === No need to configure this if using OIDC ===
+  # AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }} # Keep commented if using OIDC role
+  # AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }} # Keep commented if using OIDC role
+  # === Optional: Set image tag ===
+  IMAGE_TAG: ${{ github.sha }} # Use commit SHA as the image tag for uniqueness
+
+permissions:
+  id-token: write # Required for AWS OIDC authentication
+  contents: read  # Required for actions/checkout
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+
+    outputs:
+      image: ${{ steps.build-image.outputs.image }} # Output the full image URI
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials using OIDC
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/my-fargate-app-github-actions-role # Replace with the actual Role ARN from Terraform output
+        aws-region: ${{ env.AWS_REGION }}
+        # role-session-name: GitHubActions-${{ github.run_id }} # Optional
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build, tag, and push image to Amazon ECR
+      id: build-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        # Set the output variable for the next job
+        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+  deploy:
+    name: Deploy to ECS Fargate
+    needs: build-and-push # Run after build-and-push job completes
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials using OIDC
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/my-fargate-app-github-actions-role # Replace with the actual Role ARN from Terraform output
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Download current task definition
+      run: |
+        aws ecs describe-task-definition --task-definition ${{ env.ECS_TASK_DEFINITION_FAMILY }} --region ${{ env.AWS_REGION }} --query taskDefinition > task-definition.json
+        echo "Downloaded task definition:"
+        cat task-definition.json # Optional: view the downloaded definition
+
+    - name: Fill in the new image ID in the Amazon ECS task definition
+      id: task-def
+      uses: aws-actions/amazon-ecs-render-task-definition@v1
+      with:
+        task-definition: task-definition.json # Input file
+        container-name: ${{ env.CONTAINER_NAME }}
+        image: ${{ needs.build-and-push.outputs.image }} # Use the image URI from the previous job's output
+
+    - name: Deploy Amazon ECS task definition
+      id: deploy-ecs
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+      with:
+        task-definition: ${{ steps.task-def.outputs.task-definition }} # Use the modified task definition JSON output
+        service: ${{ env.ECS_SERVICE_NAME }}
+        cluster: ${{ env.ECS_CLUSTER_NAME }}
+        wait-for-service-stability: true # Wait for the deployment to stabilize
+        # Fargate deployments often take time, adjust timeout if needed (default 30 mins)
+        # wait-for-minutes: 15
+
+    - name: Deployment Information
+      run: |
+        echo "Deployment complete!"
+        echo "Task Definition ARN: ${{ steps.deploy-ecs.outputs.task-definition-arn }}"
+        echo "Access your application via the Load Balancer DNS (from Terraform output)."
