@@ -40,7 +40,7 @@ jobs:
     - name: Configure AWS credentials using OIDC
       uses: aws-actions/configure-aws-credentials@v4
       with:
-        role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/my-fargate-app-github-actions-role # Replace with the actual Role ARN from Terraform output
+        role-to-assume: arn:aws:iam::149536455493:role/my-fargate-app-github-actions-role # Replace with the actual Role ARN from Terraform output
         aws-region: ${{ env.AWS_REGION }}
         # role-session-name: GitHubActions-${{ github.run_id }} # Optional
 
@@ -70,7 +70,7 @@ jobs:
     - name: Configure AWS credentials using OIDC
       uses: aws-actions/configure-aws-credentials@v4
       with:
-        role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/my-fargate-app-github-actions-role # Replace with the actual Role ARN from Terraform output
+        role-to-assume: arn:aws:iam::149536455493:role/my-fargate-app-github-actions-role # Replace with the actual Role ARN from Terraform output
         aws-region: ${{ env.AWS_REGION }}
 
     - name: Download current task definition
